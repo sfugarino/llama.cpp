@@ -1,0 +1,33 @@
+# --- Build outputs (large, reproducible) -----------------------------------
+*.tar
+*.tar.gz
+llama-rpc-server*-arm64.tar*
+
+# --- Upstream llama.cpp checkout --------------------------------------------
+# Cloned separately into llama.cpp/ (see README); too large to track here.
+# If you ever convert it to a git submodule, delete this line.
+llama.cpp/
+
+# --- Model files (fetched on the node, never in the repo) -------------------
+*.gguf
+
+# --- Logs -------------------------------------------------------------------
+*.log
+
+# --- Secrets / local env (e.g. HF token overrides if added later) -----------
+.env
+.env.*
+
+# --- Editor / OS noise -------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# --- Claude Code local settings ----------------------------------------------
+.claude/settings.local.json
+
+# --- Python caches (helpers, if any) -----------------------------------------
+__pycache__/
+*.pyc

@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# One ggml-rpc-server pod per Jetson. These pods hold the model layers that
+# llama-server (via --rpc / LLAMA_ARG_RPC) streams to them; they have no
+# knowledge of the GGUF file itself.
+#
+# RPC is unauthenticated by design (llama.cpp docs: never expose it on an
+# open network). 30-networkpolicy.yaml restricts ingress to the llama-server
+# pod; keep it in place.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpc-agx
+  namespace: llama
+  labels: {app: llama-rpc, role: agx}
+spec:
+  selector:
+    app: llama-rpc
+    role: agx
+  ports:
+    - name: rpc
+      port: 50052
+      targetPort: rpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpc-agx
+  namespace: llama
+  labels: {app: llama-rpc, role: agx}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app: llama-rpc
+      role: agx
+  template:
+    metadata:
+      labels: {app: llama-rpc, role: agx}
+    spec:
+      nodeSelector:
+        jetson.role: agx
+      containers:
+        - name: rpc-server
+          image: llama-rpc-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ggml-rpc-server"]
+          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)"]
+          # These nodes run k3s with the Docker container runtime, where
+          # RuntimeClass is not usable: GPU access comes from Docker's
+          # default NVIDIA runtime (same pattern as the working ollama
+          # deployment on turing-six).
+          env:
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+          envFrom:
+            - configMapRef:
+                name: llama-config
+          ports:
+            - name: rpc
+              containerPort: 50052
+          readinessProbe:
+            tcpSocket: {port: rpc}
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            tcpSocket: {port: rpc}
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              memory: 40Gi       # AGX holds up to ~7/8 of the model
+              nvidia.com/gpu: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rpc-nano
+  namespace: llama
+  labels: {app: llama-rpc, role: nano}
+spec:
+  selector:
+    app: llama-rpc
+    role: nano
+  ports:
+    - name: rpc
+      port: 50052
+      targetPort: rpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rpc-nano
+  namespace: llama
+  labels: {app: llama-rpc, role: nano}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app: llama-rpc
+      role: nano
+  template:
+    metadata:
+      labels: {app: llama-rpc, role: nano}
+    spec:
+      nodeSelector:
+        jetson.role: nano
+      containers:
+        - name: rpc-server
+          image: llama-rpc-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ggml-rpc-server"]
+          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)"]
+          # These nodes run k3s with the Docker container runtime, where
+          # RuntimeClass is not usable: GPU access comes from Docker's
+          # default NVIDIA runtime (same pattern as the working ollama
+          # deployment on turing-six).
+          env:
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+          envFrom:
+            - configMapRef:
+                name: llama-config
+          ports:
+            - name: rpc
+              containerPort: 50052
+          readinessProbe:
+            tcpSocket: {port: rpc}
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            tcpSocket: {port: rpc}
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              memory: 7Gi        # Jetson unified memory: keep ~1 GB for the OS
+              nvidia.com/gpu: 1

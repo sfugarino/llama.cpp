@@ -1,0 +1,22 @@
+# RPC has no authentication (llama.cpp docs warn: never expose on an open
+# network). This denies all ingress to the rpc pods except from the
+# llama-server pod, inside the llama namespace. k3s (kube-router) enforces it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rpc-allow-llama-server-only
+  namespace: llama
+spec:
+  podSelector:
+    matchLabels:
+      app: llama-rpc
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: llama-server
+      ports:
+        - protocol: TCP
+          port: 50052

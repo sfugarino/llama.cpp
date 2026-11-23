@@ -1,0 +1,16 @@
+# Build context is the repo root (Dockerfile copies llama.cpp/ source).
+# NOTE: llama.cpp/scripts/ must stay INCLUDED - the server's UI-provisioning
+# step needs scripts/ui-assets.cmake at build time (dropping it fails the
+# build with "Error processing file: .../scripts/ui-assets.cmake").
+llama.cpp/.git
+llama.cpp/build*
+llama.cpp/models/
+llama.cpp/.github/
+llama.cpp/gguf-py/
+llama.cpp/benches/
+llama.cpp/pocs/
+llama.cpp/tests/
+llama.cpp/docs/
+llama.cpp/**/node_modules
+*.tar
+*.tar.gz

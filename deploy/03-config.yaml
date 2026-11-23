@@ -1,0 +1,30 @@
+# Single knob-file for the deployment. Change a value here, re-run deploy.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-config
+  namespace: llama
+data:
+  # --- model ---------------------------------------------------------------
+  # Official ungated GGUF repo (single-file Q4_K_M, ~19.8 GB).
+  MODEL_REPO: "Qwen/Qwen3-32B-GGUF"
+  MODEL_FILE: "Qwen3-32B-Q4_K_M.gguf"
+  MODEL_URL: "https://huggingface.co/Qwen/Qwen3-32B-GGUF/resolve/main"
+
+  # --- inference -----------------------------------------------------------
+  CTX_SIZE: "8192"      # KV cache @8k f16 ~= 2.1 GB, split across nodes
+  NGL: "999"            # offload every layer to the GPU devices
+  SPLIT_MODE: "layer"
+  TS_SPLIT: "7,1"       # weights: 7/8 on the AGX, 1/8 (~2.5 GB) on the Nano.
+                        # Fits an 8 GB Nano (~5 GB in use) and a 32 GB AGX.
+                        # For 64 GB AGX: "3,1" shares more memory with the
+                        # Nano; drop Nano entirely: "1,0" + remove rpc-nano
+                        # from RPC_ENDPOINTS (fastest).
+  FA: "auto"            # flash attention (auto/on/off)
+  CACHE_K: "f16"        # try q8_0 to halve KV cache (needs FA on)
+  CACHE_V: "f16"
+
+  # --- rpc mesh ------------------------------------------------------------
+  RPC_PORT: "50052"
+  # Device order here == device order for --tensor-split: device 0 = AGX.
+  RPC_ENDPOINTS: "rpc-agx:50052,rpc-nano:50052"

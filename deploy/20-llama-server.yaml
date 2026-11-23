@@ -1,0 +1,132 @@
+# ---------------------------------------------------------------------------
+# llama-server: the orchestrator. Holds the GGUF on a hostPath volume,
+# streams layer tensors to the rpc pods at load time, serves OpenAI-compatible
+# HTTP on NodePort 30990. Runs with NO GPU of its own (all compute is remote)
+# which keeps LLAMA_ARG_RPC device order deterministic for --tensor-split.
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-server
+  namespace: llama
+  labels: {app: llama-server}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      app: llama-server
+  template:
+    metadata:
+      labels: {app: llama-server}
+    spec:
+      nodeSelector:
+        jetson.role: agx
+      initContainers:
+        - name: fetch-model
+          image: llama-rpc-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: llama-config
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              mkdir -p /models
+              F="/models/$MODEL_FILE"
+              if [ -f "$F" ]; then echo "model present: $F"; exit 0; fi
+              echo "downloading $MODEL_URL/$MODEL_FILE (~20 GB) to $F"
+              rm -f "$F.stale"
+              curl -L --fail --retry 8 --retry-delay 15 --retry-all-errors \
+                   -C - -o "$F.part" "$MODEL_URL/$MODEL_FILE"
+              mv -f "$F.part" "$F"
+              echo "done: $F $(du -h "$F" | cut -f1)"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      containers:
+        - name: llama-server
+          image: llama-rpc-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-m"
+            - "/models/$(MODEL_FILE)"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8080"
+            - "-ngl"
+            - "$(NGL)"
+            - "--split-mode"
+            - "$(SPLIT_MODE)"
+            - "-ts"
+            - "$(TS_SPLIT)"
+            - "-c"
+            - "$(CTX_SIZE)"
+            - "-fa"
+            - "$(FA)"
+            - "-ctk"
+            - "$(CACHE_K)"
+            - "-ctv"
+            - "$(CACHE_V)"
+            - "--jinja"
+          envFrom:
+            - configMapRef:
+                name: llama-config
+          env:
+            - name: LLAMA_ARG_RPC
+              value: "$(RPC_ENDPOINTS)"
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 60
+            failureThreshold: 5
+          startupProbe:
+            # First start = 20 GB download (init) + tensor streaming to the
+            # rpc nodes + CUDA graphs. Allow long startup.
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 80   # 20 minutes
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 8Gi
+      volumes:
+        - name: models
+          hostPath:
+            path: /opt/llama-models
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-server
+  namespace: llama
+spec:
+  type: NodePort
+  selector:
+    app: llama-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      nodePort: 30990   # 30800 is taken by keycloak in this cluster
