@@ -6,7 +6,7 @@ Jetson exposes its GPU; llama.cpp's **RPC backend** splits the model's layers
 across both GPUs. Same code path works when the model doesn't fit one node.
 
 ```
-                        k3s cluster @ 10.0.0.222
+                        k3s cluster @ 10.0.0.<K3S_API>
   +------------------------------------------------------------+
   |  llama-server pod  (@ turing-six, no GPU, orchestrator)    |
   |    -m Qwen3-32B-Q4_K_M  -ngl 999  -ts 7,1                  |
@@ -22,9 +22,9 @@ across both GPUs. Same code path works when the model doesn't fit one node.
 
 ```bash
 TAG=0.1.0 ./container/build.sh                                    # 1. build (x86, ~hours)
-./scripts/distribute-image.sh 0.1.0 user@10.0.0.2 user@10.0.0.235 # 2. ship to both jets
+./scripts/distribute-image.sh 0.1.0 user@10.0.0.<AGX_IP> user@10.0.0.<NANO_IP> # 2. ship to both jets
 ./scripts/deploy.sh turing-six turing-five                        # 3. apply + wait
-./scripts/test.sh http://10.0.0.2:30990                           # 4. smoke test
+./scripts/test.sh http://10.0.0.<AGX_IP>:30990                           # 4. smoke test
 ```
 
 ## Prerequisites
@@ -42,9 +42,9 @@ TAG=0.1.0 ./container/build.sh                                    # 1. build (x8
   Any recent commit works — it must include the RPC backend (`GGML_RPC`, present
   since early 2024) and Qwen3 support (since early 2025).
 - x86 build host with docker + buildx
-- kubectl configured against the cluster (`~/.kube/config` -> 10.0.0.222 works)
-- SSH access to the jets: `user@10.0.0.2` (turing-six, AGX) and
-  `user@10.0.0.235` (turing-five, Nano)
+- kubectl configured against the cluster (`~/.kube/config` -> 10.0.0.<K3S_API> works)
+- SSH access to the jets: `user@10.0.0.<AGX_IP>` (turing-six, AGX) and
+  `user@10.0.0.<NANO_IP>` (turing-five, Nano)
 - Disk on turing-six: ~25 GB for the model + ~2 GB for the image
 - Optional: HF mirror override — edit `MODEL_URL` in `deploy/03-config.yaml`
 
@@ -79,7 +79,7 @@ TAG=0.1.0 ./container/build.sh
 ### 2 - Distribute (no registry)
 
 ```bash
-./scripts/distribute-image.sh 0.1.0 <user@10.0.0.2> <user@10.0.0.235>
+./scripts/distribute-image.sh 0.1.0 user@10.0.0.<AGX_IP> user@10.0.0.<NANO_IP>
 ```
 
 - The jets are k3s **docker-runtime** nodes: the tar lands in Docker's store
@@ -103,16 +103,18 @@ TAG=0.1.0 ./container/build.sh
   hold slots and a pod stays Pending, free a slot or adjust `TS_SPLIT`.
 
 ```bash
-./scripts/test.sh http://10.0.0.2:30990
+./scripts/test.sh http://10.0.0.<AGX_IP>:30990
 ```
 
 ## Cluster reality (this homelab)
 
+Node IPs are masked as role placeholders (homelab subnet 10.0.0/24); ports are unmasked.
+
 | Fact | Value |
 |---|---|
-| k3s server | `turing-one` @ 10.0.0.222, kubeconfig `~/.kube/config`, v1.35.x |
-| AGX Orin 64 GB | node **turing-six** @ 10.0.0.2, 12 cores -> labeled `jetson.role=agx` by deploy.sh |
-| Orin Nano 8 GB | node **turing-five** @ 10.0.0.235, 6 cores -> labeled `jetson.role=nano` |
+| k3s server | `turing-one` @ 10.0.0.<K3S_API>, kubeconfig `~/.kube/config`, v1.35.x |
+| AGX Orin 64 GB | node **turing-six** @ 10.0.0.<AGX_IP>, 12 cores -> labeled `jetson.role=agx` by deploy.sh |
+| Orin Nano 8 GB | node **turing-five** @ 10.0.0.<NANO_IP>, 6 cores -> labeled `jetson.role=nano` |
 | Container runtime on jets | k3s **with Docker** - `runtimeClassName` unusable; GPU pods work via Docker's default NVIDIA runtime + `NVIDIA_DRIVER_CAPABILITIES` env (proven by the existing ollama deployment) |
 | GPU advertisement | helm `nvdp` device plugin already running - **4 time-sliced slots per jetson**; never add a second device plugin (double advertisement) |
 | Storage | Longhorn + local-path available; the model uses hostPath `/opt/llama-models` on turing-six (see decision log) |
@@ -178,7 +180,7 @@ block. For chat speed, disable it. Either works (what `scripts/test.sh` does):
 ## API usage
 
 ```bash
-URL=http://10.0.0.2:30990
+URL=http://10.0.0.<AGX_IP>:30990
 
 curl -s $URL/health
 curl -s $URL/props | python3 -m json.tool | head -20
@@ -209,9 +211,9 @@ cluster runs with `--disable-network-policy`). Never expose `rpc-agx` /
 
 | Config | Approx decode tok/s (1 user) |
 |---|---|
-| Qwen3-32B Q4, AGX-only (`1,0`) | ~4-5 |
-| Qwen3-32B Q4, `7,1` split | ~3.5-4.5 |
-| 70B-class Q4, `8,1` split | ~1 |
+| Qwen3-32B Q4, AGX-only (`1,0`) | TBA |
+| Qwen3-32B Q4, `7,1` split | TBA |
+| 70B-class Q4, `8,1` split | TBA |
 
 The Nano has ~1/8 of the AGX's GPU: including it costs a little decode speed
 but frees ~15 GB of AGX memory (useful at bigger models/contexts) - the
@@ -254,5 +256,5 @@ resource-sharing trade-off this deployment encodes.
 
 ```bash
 ./scripts/undeploy.sh                              # cluster side
-ssh <user@10.0.0.2> 'rm -rf /opt/llama-models'     # model on the AGX (optional)
+ssh <user>@10.0.0.<AGX_IP> 'rm -rf /opt/llama-models'     # model on the AGX (optional)
 ```
