@@ -29,10 +29,10 @@ COPY llama.cpp/ .
 # the build inside the layer (succeeded objects persist in /out/build).
 ARG JOBS=8
 ENV CCACHE_DIR=/root/.ccache
-# LLAMA_USE_PREBUILT_UI=OFF: no npm in the image; without this the server
-# build would download the prebuilt web UI from a HF bucket at build time.
-# The build then embeds an empty UI and llama-server is API-only.
-# Flip to ON to include the built-in web UI (build-time network required).
+# LLAMA_USE_PREBUILT_UI=ON embeds the upstream prebuilt web UI: the build
+# downloads the bundle from the ggml-org/llama-ui HF bucket (needs network;
+# falls back gracefully to an empty UI if the fetch fails).
+# Set OFF for a deterministic API-only build with zero build-time fetches.
 RUN cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
@@ -42,7 +42,7 @@ RUN cmake -B build -G Ninja \
         -DLLAMA_BUILD_IS_DEV=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_USE_PREBUILT_UI=OFF \
+        -DLLAMA_USE_PREBUILT_UI=ON \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build build --target llama-server ggml-rpc-server -- -j"$JOBS" \

@@ -66,10 +66,13 @@ TAG=0.1.0 ./container/build.sh
 - CUDA base: 12.4 works on JetPack 6.x via minor-version compatibility
   (JetPack 6.0 = driver CUDA 12.2). Strict-alignment rebuild:
   `CUDA_BASE=12.2.2 TAG=0.1.0 ./container/build.sh`.
-- The image is **API-only** llama-server: `LLAMA_USE_PREBUILT_UI=OFF` in the
-  Dockerfile keeps builds deterministic (otherwise the build downloads the
-  web-UI bundle from a HF bucket at build time). Flip to `ON` for the browser
-  UI.
+- The image embeds the **prebuilt web UI** when available
+  (`LLAMA_USE_PREBUILT_UI=ON`): the build fetches the bundle from the
+  `ggml-org/llama-ui` HF bucket and, if that fetch is unauthorized or
+  unreachable, provisioning falls back **gracefully** to an API-only server.
+  `OFF` in `container/Dockerfile` gives a fully deterministic zero-network
+  build; air-gapped builds can instead extract the UI from a llama.cpp release
+  tarball into `ui/apps/chat/dist` (priority 1 in the provisioning script).
 - Gotcha: `.dockerignore` must keep `llama.cpp/scripts/` - the server's
   "Provisioning UI assets" step needs `scripts/ui-assets.cmake` and runs
   unconditionally. Symptom if dropped: `Error processing file:
@@ -129,6 +132,28 @@ Node IPs are masked as role placeholders (homelab subnet 10.0.0/24); ports are u
 | `rpc-nano` | turing-five | 1 slot | executes the rest (~1/8) |
 | `fetch-model` (init) | turing-six | none | idempotent download of `MODEL_FILE` |
 
+### The web UI (where it lives and why)
+
+The UI is **not a separate deployment**: with `LLAMA_USE_PREBUILT_UI=ON` the
+bundle is embedded at build time inside the `llama-server` binary itself
+(`scripts/ui-assets.cmake` generates `ui.cpp`/`ui.h` linked into it). There is
+no UI pod and no placement choice to make: the UI is served by whoever runs
+`llama-server` - the orchestrator - which `deploy/20-llama-server.yaml` pins
+to the AGX (`nodeSelector: jetson.role: agx` = turing-six). "Orchestrator" and
+"the AGX" are the same node in this topology.
+
+- Reach it at `http://<any-node-ip>:30990/` (NodePort 30990 - any cluster node
+  IP answers; the Service simply follows the llama-server pod).
+- The AGX pin is deliberate: the AGX shares its node with `rpc-agx` (tensor
+  streaming stays node-local), hosts `/opt/llama-models`, and keeps UI/API/
+  template work off the Nano's 6 cores.
+- If the UI bundle was not embedded (the 401 fallback path - see decision
+  log), `/` serves no UI and API paths are unaffected; the flags and
+  provisioning priority are documented in **Step details - 1 Build**.
+- Moving the UI means moving the whole orchestrator (swap the nodeSelector).
+  Possible but not recommended: the new node would also inherit the ~20 GB
+  model download and the slower rpc hop.
+
 ## Memory budget (why `--ts 7,1`)
 
 Qwen3-32B Q4_K_M is ~19.8 GB of weights; KV @8k f16 is ~2.1 GB, split by layer
@@ -169,6 +194,13 @@ Preset recipes:
 | Tight Nano memory | `TS_SPLIT: "9,1"`, or `CACHE_K/V: "q8_0"` |
 | Bigger context | `CTX_SIZE: "16384"` (+ `q8_0` KV recommended) |
 
+Note: with no `-ts`, upstream llama.cpp distributes weights and KV across all
+devices in proportion to each device's *free* memory (see the upstream
+[rpc README](https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md)).
+Our fixed `7,1` is a deliberate predictability choice - free memory shifts as
+ollama and other tenants come and go. On a node with several GPUs, exposure can
+be pinned with `ggml-rpc-server --device CUDA0`.
+
 ## Thinking mode
 
 Qwen3 is a hybrid thinking model - default output starts with a thinking
@@ -207,6 +239,10 @@ llama-server pod (k3s's embedded kube-router enforces NetworkPolicy unless the
 cluster runs with `--disable-network-policy`). Never expose `rpc-agx` /
 `rpc-nano` via NodePort.
 
+Upstream reference for the RPC backend - including the "proof-of-concept, never
+expose it on an open network" warning that motivates the NetworkPolicy:
+[llama.cpp tools/rpc/README.md](https://github.com/ggml-org/llama.cpp/blob/master/tools/rpc/README.md).
+
 ## Speed expectations
 
 | Config | Approx decode tok/s (1 user) |
@@ -239,6 +275,16 @@ resource-sharing trade-off this deployment encodes.
   keep it out of `.dockerignore`.
 - **Slow first token** - the warm-up passes through all RPC layers once;
   subsequent requests are normal.
+- **RPC debugging** - `GGML_RPC_DEBUG=1` (1 = events, 2 = per-command trace,
+  3 = timings) on either side, paired with `-lv 5` on the llama-server side so
+  records are not dropped:
+  `kubectl -n llama set env deploy/rpc-agx deploy/rpc-nano GGML_RPC_DEBUG=2`.
+- **Slow llama-server restart** - the rpc pods keep a **local tensor cache**
+  (`ggml-rpc-server -c`, `LLAMA_CACHE=/var/cache/llama-rpc`, backed by hostPath
+  `/opt/llama-rpc-cache`): the first load streams tensors over the network,
+  later restarts read them from local disk. If a node is disk-constrained,
+  remove `-c` and the cache volume from `deploy/10-rpc-servers.yaml` (or
+  `rm -rf /opt/llama-rpc-cache` on that node).
 
 ## Decision log
 
@@ -246,8 +292,12 @@ resource-sharing trade-off this deployment encodes.
   `d359f3092`); the current checkout has no `GGML_MPI`. The RPC backend is the
   maintained multi-node mechanism with the same layer-split resource sharing.
   Decided 2026-11-21.
-- **API-only image.** `LLAMA_USE_PREBUILT_UI=OFF` removes a build-time network
-  fetch (the prebuilt web-UI bundle from HF). Flip to `ON` for the browser UI.
+- **API-only image (current reality).** `LLAMA_USE_PREBUILT_UI=ON` was flipped
+  on 2026-11-23, but the `ggml-org/llama-ui` bucket answers 401 from this build
+  host, so provisioning falls back to an empty embedded UI. For a real browser
+  UI: provide an HF token with access to the bucket, or vendor the prebuilt UI
+  from a llama.cpp GitHub release into `llama.cpp/ui/apps/chat/dist`
+  (highest provisioning priority). `LLAMA_USE_PREBUILT_UI=OFF` skips the fetch.
 - **hostPath, not Longhorn** for the model: the llama-server pod is pinned to
   the AGX node, and a Longhorn replica would risk landing on the Nano's
   constrained storage. Revisit if the pod unpins.

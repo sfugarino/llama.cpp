@@ -41,12 +41,17 @@ spec:
     spec:
       nodeSelector:
         jetson.role: agx
+      volumes:
+        - name: rpc-cache
+          hostPath:
+            path: /opt/llama-rpc-cache
+            type: DirectoryOrCreate
       containers:
         - name: rpc-server
           image: llama-rpc-server:0.1.0
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/ggml-rpc-server"]
-          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)"]
+          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)", "-c"]
           # These nodes run k3s with the Docker container runtime, where
           # RuntimeClass is not usable: GPU access comes from Docker's
           # default NVIDIA runtime (same pattern as the working ollama
@@ -54,6 +59,9 @@ spec:
           env:
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "compute,utility"
+            # local tensor cache for fast restarts (ggml-rpc-server -c)
+            - name: LLAMA_CACHE
+              value: "/var/cache/llama-rpc"
           envFrom:
             - configMapRef:
                 name: llama-config
@@ -75,6 +83,9 @@ spec:
             limits:
               memory: 40Gi       # AGX holds up to ~7/8 of the model
               nvidia.com/gpu: 1
+          volumeMounts:
+            - name: rpc-cache
+              mountPath: /var/cache/llama-rpc
 ---
 apiVersion: v1
 kind: Service
@@ -110,12 +121,17 @@ spec:
     spec:
       nodeSelector:
         jetson.role: nano
+      volumes:
+        - name: rpc-cache
+          hostPath:
+            path: /opt/llama-rpc-cache
+            type: DirectoryOrCreate
       containers:
         - name: rpc-server
           image: llama-rpc-server:0.1.0
           imagePullPolicy: IfNotPresent
           command: ["/usr/local/bin/ggml-rpc-server"]
-          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)"]
+          args: ["--host", "0.0.0.0", "--port", "$(RPC_PORT)", "-c"]
           # These nodes run k3s with the Docker container runtime, where
           # RuntimeClass is not usable: GPU access comes from Docker's
           # default NVIDIA runtime (same pattern as the working ollama
@@ -123,6 +139,9 @@ spec:
           env:
             - name: NVIDIA_DRIVER_CAPABILITIES
               value: "compute,utility"
+            # local tensor cache for fast restarts (ggml-rpc-server -c)
+            - name: LLAMA_CACHE
+              value: "/var/cache/llama-rpc"
           envFrom:
             - configMapRef:
                 name: llama-config
@@ -144,3 +163,6 @@ spec:
             limits:
               memory: 7Gi        # Jetson unified memory: keep ~1 GB for the OS
               nvidia.com/gpu: 1
+          volumeMounts:
+            - name: rpc-cache
+              mountPath: /var/cache/llama-rpc
